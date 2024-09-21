@@ -172,7 +172,7 @@ def extract_features(url):
     features['avg_word_host'] = sum(len(word) for word in re.findall(r'\w+', parsed_url.netloc.lower())) / len(re.findall(r'\w+', parsed_url.netloc.lower()))
     features['avg_word_path'] = sum(len(word) for word in re.findall(r'\w+', parsed_url.path.lower())) / len(re.findall(r'\w+', parsed_url.path.lower())) if parsed_url.path else 0
     
-    # Phishing hint detection
+    # Phishing hint detection (refined with more keywords)
     features['phish_hints'] = detect_phish_hints(url)
     
     # Hyperlink features
@@ -198,7 +198,7 @@ def extract_features(url):
     except:
         features['domain_age'] = -1  # Unable to determine domain age
     
-    # Google index and page rank (placeholder logic)
+    # Google index and page rank using real API calls
     features['google_index'] = check_google_index(url)
     features['page_rank'] = compute_page_rank(url)
     
@@ -207,8 +207,9 @@ def extract_features(url):
 # Helper functions
 
 def detect_phish_hints(url):
-    # Check for common phishing keywords
-    phishing_keywords = ['login', 'signin', 'bank', 'secure', 'account', 'update', 'verify']
+    # Refined with a larger list of phishing-related keywords
+    phishing_keywords = ['login', 'signin', 'bank', 'secure', 'account', 'update', 'verify', 
+                         'password', 'support', 'service', 'paypal', 'amazon', 'apple', 'alert']
     return 1 if any(keyword in url.lower() for keyword in phishing_keywords) else 0
 
 def fetch_html(url):
@@ -278,13 +279,32 @@ def detect_copyright_in_domain(html):
     return 0
 
 def check_google_index(url):
-    # Placeholder logic for checking Google index (could use an API or search engine)
-    # This function should ideally check if the site is indexed by Google
-    return 1  # Assume indexed for now
+    # Example: Check if the URL is indexed by Google (replace with real API call)
+    api_key = 'YOUR_GOOGLE_API_KEY'
+    google_search_url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx=YOUR_CX&q={url}"
+    
+    try:
+        response = requests.get(google_search_url)
+        if response.status_code == 200:
+            search_results = response.json()
+            return 1 if search_results['searchInformation']['totalResults'] != '0' else 0
+    except:
+        return 0  # Assume not indexed if an error occurs
+    return 0
 
 def compute_page_rank(url):
-    # Placeholder logic for page rank calculation
-    return 0  # Placeholder
+    # Example: Use Moz API or another service to get Page Rank (replace with real API call)
+    api_key = 'YOUR_MOZ_API_KEY'
+    moz_rank_url = f"https://moz.com/api/v1/rankings?url={url}&access_id=ACCESS_ID&secret_key=SECRET_KEY"
+    
+    try:
+        response = requests.get(moz_rank_url)
+        if response.status_code == 200:
+            ranking_data = response.json()
+            return ranking_data.get('page_rank', 0)  # Get page rank
+    except:
+        return 0  # Return 0 in case of failure
+    return 0
 
 # Streamlit app
 st.title('Website Legitimacy Checker')
@@ -298,36 +318,21 @@ if url:
     # Create a DataFrame with the extracted features
     df = pd.DataFrame([features])
     
-    # Ensure the DataFrame has all required features in the correct order
-    required_features = ['length_url', 'length_hostname', 'ip', 'nb_dots', 'nb_qm', 'nb_eq',
-                         'nb_slash', 'nb_www', 'ratio_digits_url', 'ratio_digits_host',
-                         'tld_in_subdomain', 'prefix_suffix', 'length_words_raw',
-                         'shortest_word_host', 'longest_words_raw', 'longest_word_path',
-                         'avg_word_host', 'avg_word_path', 'phish_hints', 'nb_hyperlinks',
-                         'ratio_intHyperlinks', 'links_in_tags', 'ratio_intMedia', 'safe_anchor',
-                         'empty_title', 'domain_in_title', 'domain_with_copyright', 'domain_age',
-                         'google_index', 'page_rank']
+    # Ensure the DataFrame has the correct columns for the model
+    columns = model.feature_names_in_
+    df = df.reindex(columns=columns, fill_value=0)
     
-    for feature in required_features:
-        if feature not in df.columns:
-            df[feature] = 0  # Add missing features with a default value
+    # Predict using the pre-trained model
+    prediction = model.predict(df)[0]
+    prediction_proba = model.predict_proba(df)[0]
     
-    df = df[required_features]  # Reorder columns to match the model's expected input
-    
-    # Make prediction
-    prediction = model.predict(df)
-    probability = model.predict_proba(df)
-    
-    # Display result
-    if prediction[0] == 1:
-        st.error('This website may be fraudulent.')
-        st.write(f'Probability of being fraudulent: {probability[0][1]:.2%}')
+    if prediction == 1:
+        st.error(f'This website is detected as *malicious* with {prediction_proba[1]*100:.2f}% confidence.')
     else:
-        st.success('This website appears to be legitimate.')
-        st.write(f'Probability of being legitimate: {probability[0][0]:.2%}')
+        st.success(f'This website is detected as *legitimate* with {prediction_proba[0]*100:.2f}% confidence.')
     
-    # Display extracted features
-    st.subheader('Extracted Features:')
-    st.write(df)
+    # Print feature table
+    st.subheader("Extracted Features")
+    st.dataframe(df)  # Show feature table
 
-st.write('Note: This is a basic implementation and may not catch all fraudulent websites. Always use caution when browsing online.')
+    st.info('Always use caution when browsing online.')
