@@ -132,179 +132,158 @@ import re
 from datetime import datetime
 import whois
 from bs4 import BeautifulSoup
+import tldextract
+import ssl
+import socket
+from urllib.request import urlopen
 
 # Load the trained model
-model = joblib.load('best_modelLGBM_pipeline.joblib')
+@st.cache_resource
+def load_model():
+    return joblib.load('best_modelLGBM_pipeline.joblib')
 
-# Feature extraction functions
+model = load_model()
+
+def get_domain(url):
+    return tldextract.extract(url).domain + '.' + tldextract.extract(url).suffix
+
+def is_ip_address(url):
+    try:
+        socket.inet_aton(urlparse(url).netloc)
+        return 1
+    except socket.error:
+        return 0
+
 def extract_features(url):
     features = {}
-    
-    # Basic URL features
-    features['length_url'] = len(url)
     parsed_url = urlparse(url)
+    domain = get_domain(url)
+    
+    # 1. length_url
+    features['length_url'] = len(url)
+    
+    # 2. length_hostname
     features['length_hostname'] = len(parsed_url.netloc)
     
-    # IP address detection
-    features['ip'] = 1 if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", parsed_url.netloc) else 0
+    # 3. ip
+    features['ip'] = is_ip_address(url)
     
-    # Counting features
+    # 4. nb_dots
     features['nb_dots'] = url.count('.')
+    
+    # 5. nb_qm
     features['nb_qm'] = url.count('?')
+    
+    # 6. nb_eq
     features['nb_eq'] = url.count('=')
+    
+    # 7. nb_slash
     features['nb_slash'] = url.count('/')
+    
+    # 8. nb_www
     features['nb_www'] = url.lower().count('www')
     
-    # Ratio of digits in URL and hostname
-    features['ratio_digits_url'] = sum(c.isdigit() for c in url) / len(url)
-    features['ratio_digits_host'] = sum(c.isdigit() for c in parsed_url.netloc) / len(parsed_url.netloc)
+    # 9. ratio_digits_url
+    features['ratio_digits_url'] = sum(c.isdigit() for c in url) / len(url) if len(url) > 0 else 0
     
-    # TLD and domain features
-    features['tld_in_subdomain'] = 1 if parsed_url.netloc.count('.') > 1 else 0
+    # 10. ratio_digits_host
+    features['ratio_digits_host'] = sum(c.isdigit() for c in parsed_url.netloc) / len(parsed_url.netloc) if len(parsed_url.netloc) > 0 else 0
+    
+    # 11. tld_in_subdomain
+    features['tld_in_subdomain'] = 1 if tldextract.extract(parsed_url.netloc).suffix in tldextract.extract(parsed_url.netloc).subdomain else 0
+    
+    # 12. prefix_suffix
     features['prefix_suffix'] = 1 if '-' in parsed_url.netloc else 0
     
-    # Word-based features
+    # 13. length_words_raw
     words_raw = re.findall(r'\w+', url.lower())
     features['length_words_raw'] = len(words_raw)
-    features['shortest_word_host'] = min(len(word) for word in re.findall(r'\w+', parsed_url.netloc.lower()))
-    features['longest_words_raw'] = max(len(word) for word in words_raw)
-    features['longest_word_path'] = max(len(word) for word in re.findall(r'\w+', parsed_url.path.lower())) if parsed_url.path else 0
-    features['avg_word_host'] = sum(len(word) for word in re.findall(r'\w+', parsed_url.netloc.lower())) / len(re.findall(r'\w+', parsed_url.netloc.lower()))
-    features['avg_word_path'] = sum(len(word) for word in re.findall(r'\w+', parsed_url.path.lower())) / len(re.findall(r'\w+', parsed_url.path.lower())) if parsed_url.path else 0
     
-    # Phishing hint detection (refined with more keywords)
-    features['phish_hints'] = detect_phish_hints(url)
+    # 14. shortest_word_host
+    host_words = re.findall(r'\w+', parsed_url.netloc.lower())
+    features['shortest_word_host'] = min(len(word) for word in host_words) if host_words else 0
     
-    # Hyperlink features
-    html_content = fetch_html(url)
-    features['nb_hyperlinks'], features['ratio_intHyperlinks'], features['links_in_tags'] = count_hyperlinks(html_content, parsed_url.netloc)
+    # 15. longest_words_raw
+    features['longest_words_raw'] = max(len(word) for word in words_raw) if words_raw else 0
     
-    # Media and anchor features
-    features['ratio_intMedia'], features['safe_anchor'] = compute_media_and_anchor(html_content, parsed_url.netloc)
+    # 16. longest_word_path
+    path_words = re.findall(r'\w+', parsed_url.path.lower())
+    features['longest_word_path'] = max(len(word) for word in path_words) if path_words else 0
     
-    # Title features
-    features['empty_title'], features['domain_in_title'] = detect_title_features(html_content, parsed_url.netloc)
+    # 17. avg_word_host
+    features['avg_word_host'] = sum(len(word) for word in host_words) / len(host_words) if host_words else 0
     
-    # Copyright check
-    features['domain_with_copyright'] = detect_copyright_in_domain(html_content)
+    # 18. avg_word_path
+    features['avg_word_path'] = sum(len(word) for word in path_words) / len(path_words) if path_words else 0
     
-    # Domain age (using WHOIS data)
+    # Fetch webpage content
     try:
-        domain_info = whois.whois(parsed_url.netloc)
+        response = requests.get(url, timeout=5, verify=False)
+        soup = BeautifulSoup(response.content, 'html.parser')
+    except:
+        soup = None
+
+    # 19. phish_hints
+    phish_words = ['secure', 'account', 'webscr', 'login', 'ebayisapi', 'signin', 'banking', 'confirm']
+    features['phish_hints'] = sum(word in url.lower() for word in phish_words)
+    
+    if soup:
+        # 20. nb_hyperlinks
+        hyperlinks = soup.find_all('a', href=True)
+        features['nb_hyperlinks'] = len(hyperlinks)
+        
+        # 21. ratio_intHyperlinks
+        internal_links = sum(get_domain(link['href']) == domain for link in hyperlinks if link['href'].startswith('http'))
+        features['ratio_intHyperlinks'] = internal_links / features['nb_hyperlinks'] if features['nb_hyperlinks'] > 0 else 0
+        
+        # 22. links_in_tags
+        features['links_in_tags'] = sum(link.parent.name in ['meta', 'script', 'link'] for link in hyperlinks)
+        
+        # 23. ratio_intMedia
+        media_links = soup.find_all(['img', 'audio', 'video', 'source'], src=True)
+        internal_media = sum(get_domain(media['src']) == domain for media in media_links if media['src'].startswith('http'))
+        features['ratio_intMedia'] = internal_media / len(media_links) if len(media_links) > 0 else 0
+        
+        # 24. safe_anchor
+        features['safe_anchor'] = 0 if soup.find('a', href='#') else 1
+        
+        # 25. empty_title
+        features['empty_title'] = 1 if not soup.title or not soup.title.string.strip() else 0
+        
+        # 26. domain_in_title
+        features['domain_in_title'] = 1 if soup.title and domain.lower() in soup.title.string.lower() else 0
+        
+        # 27. domain_with_copyright
+        features['domain_with_copyright'] = 1 if soup.find(text=re.compile(r'©.*' + re.escape(domain), re.IGNORECASE)) else 0
+    else:
+        features['nb_hyperlinks'] = features['ratio_intHyperlinks'] = features['links_in_tags'] = 0
+        features['ratio_intMedia'] = features['safe_anchor'] = features['empty_title'] = 0
+        features['domain_in_title'] = features['domain_with_copyright'] = 0
+    
+    # 28. domain_age
+    try:
+        domain_info = whois.whois(domain)
         creation_date = domain_info.creation_date
         if isinstance(creation_date, list):
             creation_date = creation_date[0]
         features['domain_age'] = (datetime.now() - creation_date).days
     except:
-        features['domain_age'] = -1  # Unable to determine domain age
+        features['domain_age'] = -1  # Unable to determine
     
-    # Google index and page rank using real API calls
-    features['google_index'] = check_google_index(url)
-    features['page_rank'] = compute_page_rank(url)
+    # 29. google_index
+    try:
+        query = f"site:{domain}"
+        url = f"https://www.google.com/search?q={query}"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        features['google_index'] = 1 if "did not match any documents" not in response.text else 0
+    except:
+        features['google_index'] = -1  # Unable to determine
+    
+    # 30. page_rank (Note: Actual PageRank requires access to Google's API, which is not freely available)
+    # For this example, we'll use a simplified heuristic based on HTTPS and domain age
+    features['page_rank'] = 1 if parsed_url.scheme == 'https' and features['domain_age'] > 365 else 0
     
     return features
-
-# Helper functions
-
-def detect_phish_hints(url):
-    # Refined with a larger list of phishing-related keywords
-    phishing_keywords = ['login', 'signin', 'bank', 'secure', 'account', 'update', 'verify', 
-                         'password', 'support', 'service', 'paypal', 'amazon', 'apple', 'alert']
-    return 1 if any(keyword in url.lower() for keyword in phishing_keywords) else 0
-
-def fetch_html(url):
-    # Fetch HTML content from the URL
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text
-    except requests.RequestException:
-        return ""
-    return ""
-
-def count_hyperlinks(html, domain):
-    # Parse the HTML content and count hyperlinks
-    if html:
-        soup = BeautifulSoup(html, 'html.parser')
-        all_links = soup.find_all('a')
-        nb_hyperlinks = len(all_links)
-        int_links = 0
-        links_in_tags = 0
-        
-        for link in all_links:
-            href = link.get('href', '')
-            if href.startswith('/') or domain in href:
-                int_links += 1
-            if link.parent.name in ['div', 'span', 'p']:
-                links_in_tags += 1
-        
-        ratio_intHyperlinks = int_links / nb_hyperlinks if nb_hyperlinks > 0 else 0
-        return nb_hyperlinks, ratio_intHyperlinks, links_in_tags
-    return 0, 0, 0
-
-def compute_media_and_anchor(html, domain):
-    # Parse HTML for media and anchor tag analysis
-    if html:
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Media links (e.g., images, videos)
-        media_links = soup.find_all(['img', 'video', 'source'])
-        int_media = sum(1 for media in media_links if domain in media.get('src', ''))
-        ratio_intMedia = int_media / len(media_links) if media_links else 0
-        
-        # Safe anchors
-        anchors = soup.find_all('a')
-        safe_anchors = sum(1 for anchor in anchors if anchor.get('href', '#') != '#')
-        safe_anchor_ratio = safe_anchors / len(anchors) if anchors else 0
-        
-        return ratio_intMedia, safe_anchor_ratio
-    return 0, 0
-
-def detect_title_features(html, domain):
-    # Check if the title tag is empty and if the domain appears in the title
-    if html:
-        soup = BeautifulSoup(html, 'html.parser')
-        title = soup.find('title')
-        if title:
-            title_text = title.text.strip()
-            empty_title = 0 if title_text else 1
-            domain_in_title = 1 if domain.lower() in title_text.lower() else 0
-            return empty_title, domain_in_title
-    return 1, 0
-
-def detect_copyright_in_domain(html):
-    # Check if the domain has copyright symbols in the content
-    if html:
-        return 1 if '©' in html or 'copyright' in html.lower() else 0
-    return 0
-
-def check_google_index(url):
-    # Example: Check if the URL is indexed by Google (replace with real API call)
-    api_key = 'YOUR_GOOGLE_API_KEY'
-    google_search_url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx=YOUR_CX&q={url}"
-    
-    try:
-        response = requests.get(google_search_url)
-        if response.status_code == 200:
-            search_results = response.json()
-            return 1 if search_results['searchInformation']['totalResults'] != '0' else 0
-    except:
-        return 0  # Assume not indexed if an error occurs
-    return 0
-
-def compute_page_rank(url):
-    # Example: Use Moz API or another service to get Page Rank (replace with real API call)
-    api_key = 'YOUR_MOZ_API_KEY'
-    moz_rank_url = f"https://moz.com/api/v1/rankings?url={url}&access_id=ACCESS_ID&secret_key=SECRET_KEY"
-    
-    try:
-        response = requests.get(moz_rank_url)
-        if response.status_code == 200:
-            ranking_data = response.json()
-            return ranking_data.get('page_rank', 0)  # Get page rank
-    except:
-        return 0  # Return 0 in case of failure
-    return 0
 
 # Streamlit app
 st.title('Website Legitimacy Checker')
@@ -312,27 +291,51 @@ st.title('Website Legitimacy Checker')
 url = st.text_input('Enter a website URL:')
 
 if url:
-    # Extract features
-    features = extract_features(url)
-    
-    # Create a DataFrame with the extracted features
-    df = pd.DataFrame([features])
-    
-    # Ensure the DataFrame has the correct columns for the model
-    columns = model.feature_names_in_
-    df = df.reindex(columns=columns, fill_value=0)
-    
-    # Predict using the pre-trained model
-    prediction = model.predict(df)[0]
-    prediction_proba = model.predict_proba(df)[0]
-    
-    if prediction == 1:
-        st.error(f'This website is detected as *malicious* with {prediction_proba[1]*100:.2f}% confidence.')
-    else:
-        st.success(f'This website is detected as *legitimate* with {prediction_proba[0]*100:.2f}% confidence.')
-    
-    # Print feature table
-    st.subheader("Extracted Features")
-    st.dataframe(df)  # Show feature table
+    with st.spinner('Analyzing the website...'):
+        # Extract features
+        features = extract_features(url)
+        
+        # Create a DataFrame with the extracted features
+        df = pd.DataFrame([features])
+        
+        # Ensure the DataFrame has all required features in the correct order
+        required_features = ['length_url', 'length_hostname', 'ip', 'nb_dots', 'nb_qm', 'nb_eq',
+                             'nb_slash', 'nb_www', 'ratio_digits_url', 'ratio_digits_host',
+                             'tld_in_subdomain', 'prefix_suffix', 'length_words_raw',
+                             'shortest_word_host', 'longest_words_raw', 'longest_word_path',
+                             'avg_word_host', 'avg_word_path', 'phish_hints', 'nb_hyperlinks',
+                             'ratio_intHyperlinks', 'links_in_tags', 'ratio_intMedia', 'safe_anchor',
+                             'empty_title', 'domain_in_title', 'domain_with_copyright', 'domain_age',
+                             'google_index', 'page_rank']
+        
+        for feature in required_features:
+            if feature not in df.columns:
+                df[feature] = 0  # Add missing features with a default value
+        
+        df = df[required_features]  # Reorder columns to match the model's expected input
+        
+        # Make prediction
+        prediction = model.predict(df)
+        probability = model.predict_proba(df)
+        
+        # Display result
+        if prediction[0] == 0:  # Assuming 0 is legitimate and 1 is fraudulent
+            st.success('This website appears to be legitimate.')
+            st.write(f'Probability of being legitimate: {probability[0][0]:.2%}')
+        else:
+            st.error('This website may be fraudulent.')
+            st.write(f'Probability of being fraudulent: {probability[0][1]:.2%}')
+        
+        # Display extracted features
+        st.subheader('Extracted Features:')
+        st.write(df)
 
-    st.info('Always use caution when browsing online.')
+        # Display feature importances
+        if hasattr(model, 'feature_importances_'):
+            st.subheader('Feature Importances:')
+            importances = model.feature_importances_
+            feature_imp = pd.DataFrame({'feature': required_features, 'importance': importances})
+            feature_imp = feature_imp.sort_values('importance', ascending=False)
+            st.bar_chart(feature_imp.set_index('feature')['importance'])
+
+st.write('Note: This tool provides an estimate based on the available information. Always exercise caution when browsing unfamiliar websites.')
