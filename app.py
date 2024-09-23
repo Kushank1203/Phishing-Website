@@ -12,8 +12,9 @@ import socket
 import ssl
 import tldextract
 
+
 # Load the trained model
-model = joblib.load('optimized_lgbm_model.joblib')
+model = joblib.load('optimized_lgbm.joblib')
 
 def extract_features(url):
     features = {}
