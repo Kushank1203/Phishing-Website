@@ -14,27 +14,6 @@ import tldextract
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-import subprocess
-
-# List of dependencies
-dependencies = [
-    "numpy",
-    "pandas",
-    "streamlit",
-    "joblib",
-    "lightgbm",
-    "requests",
-    "tldextract",
-    "whois",
-    "beautifulsoup4",
-    "dns.resolver"
-]
-
-# Write to requirements.txt
-with open("requirements.txt", "w") as f:
-    for package in dependencies:
-        subprocess.run(f"pip show {package}".split(), stdout=f)
-
 
 class FeatureAlignmentHandler:
     def __init__(self, model_path):
