@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 from urllib.parse import urlparse
-import lightgbm as lgbm
+# import lightgbm as lgbm
 import joblib
 from tld import get_tld
 import whois
@@ -15,6 +15,7 @@ import dns.resolver
 import tldextract
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 class FeatureAlignmentHandler:
     def __init__(self, model_path):
