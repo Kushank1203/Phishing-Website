@@ -3,14 +3,12 @@ import pandas as pd
 import numpy as np
 import re
 from urllib.parse import urlparse
-# import lightgbm as lgbm
 import joblib
 from tld import get_tld
 import whois
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
-import socket
 import dns.resolver
 import tldextract
 import urllib3
